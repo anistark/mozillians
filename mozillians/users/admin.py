@@ -1,3 +1,5 @@
+from socket import error as socket_error
+
 from django import forms
 from django.conf import settings
 from django.conf.urls import patterns, url
@@ -55,7 +57,7 @@ def unsubscribe_from_basket_action():
 
     def unsubscribe_from_basket(modeladmin, request, queryset):
         """Unsubscribe from Basket."""
-        ts = [(mozillians.users.tasks.remove_from_basket_task
+        ts = [(mozillians.users.tasks.unsubscribe_from_basket_task
                .subtask(args=[userprofile.user.email, userprofile.basket_token]))
               for userprofile in queryset]
         TaskSet(ts).apply_async()
@@ -65,16 +67,17 @@ def unsubscribe_from_basket_action():
     return unsubscribe_from_basket
 
 
-def update_can_vouch_action():
-    """Update can_vouch flag action."""
+def update_vouch_flags_action():
+    """Update can_vouch, is_vouched flag action."""
 
-    def update_can_vouch(modeladmin, request, queryset):
+    def update_vouch_flags(modeladmin, request, queryset):
         for profile in queryset:
-            profile.can_vouch = (
-                profile.vouches_received.count() >= settings.CAN_VOUCH_THRESHOLD)
+            vouches_received = profile.vouches_received.count()
+            profile.can_vouch = vouches_received >= settings.CAN_VOUCH_THRESHOLD
+            profile.is_vouched = vouches_received > 0
             profile.save()
-    update_can_vouch.short_description = 'Update can_vouch flag.'
-    return update_can_vouch
+    update_vouch_flags.short_description = 'Update vouch flags'
+    return update_vouch_flags
 
 
 class SuperUserFilter(SimpleListFilter):
@@ -139,7 +142,7 @@ class DateJoinedFilter(SimpleListFilter):
     def lookups(self, request, model_admin):
 
         return map(lambda x: (str(x.year), x.year),
-                   User.objects.dates('date_joined', 'year'))
+                   User.objects.datetimes('date_joined', 'year'))
 
     def queryset(self, request, queryset):
         if self.value() is None:
@@ -179,6 +182,24 @@ class LastLoginFilter(SimpleListFilter):
         elif self.value() == '>360':
             return queryset.filter(user__last_login__lt=get_datetime(-360))
         return queryset
+
+
+class AlternateEmailFilter(SimpleListFilter):
+    """Admin filter for users with alternate emails."""
+    title = 'alternate email'
+    parameter_name = 'alternate_email'
+
+    def lookups(self, request, model_admin):
+        return(('False', 'No'), ('True', 'Yes'))
+
+    def queryset(self, request, queryset):
+        if self.value() is None:
+            return queryset
+
+        if self.value() == 'True':
+            return queryset.filter(externalaccount__type=ExternalAccount.TYPE_EMAIL)
+
+        return queryset.exclude(externalaccount__type=ExternalAccount.TYPE_EMAIL)
 
 
 class LegacyVouchFilter(SimpleListFilter):
@@ -246,6 +267,34 @@ class ExternalAccountInline(admin.TabularInline):
     model = ExternalAccount
     extra = 1
 
+    def queryset(self, request):
+        """Exclude alternate emails from external accounts"""
+        qs = super(ExternalAccountInline, self).queryset(request)
+        return qs.exclude(type=ExternalAccount.TYPE_EMAIL)
+
+
+class AlternateEmailForm(forms.ModelForm):
+    def save(self, *args, **kwargs):
+        self.instance.type = ExternalAccount.TYPE_EMAIL
+        return super(AlternateEmailForm, self).save(*args, **kwargs)
+
+    class Meta:
+        model = ExternalAccount
+        exclude = ['type']
+
+
+class AlternateEmailInline(admin.TabularInline):
+    form = AlternateEmailForm
+    model = ExternalAccount
+    extra = 1
+    verbose_name = 'Alternate Email'
+    verbose_name_plural = 'Alternate Emails'
+
+    def queryset(self, request):
+        """Limit queryset to alternate emails."""
+        qs = super(AlternateEmailInline, self).queryset(request)
+        return qs.filter(type=ExternalAccount.TYPE_EMAIL)
+
 
 class UserProfileAdminForm(forms.ModelForm):
     username = forms.CharField()
@@ -296,21 +345,23 @@ class UserProfileResource(ModelResource):
 
 class UserProfileAdmin(AdminImageMixin, ExportMixin, admin.ModelAdmin):
     resource_class = UserProfileResource
-    inlines = [LanguageInline, GroupMembershipInline, ExternalAccountInline]
+    inlines = [LanguageInline, GroupMembershipInline, ExternalAccountInline,
+               AlternateEmailInline]
     search_fields = ['full_name', 'user__email', 'user__username', 'ircname',
                      'geo_country__name', 'geo_region__name', 'geo_city__name']
     readonly_fields = ['date_vouched', 'vouched_by', 'user', 'date_joined', 'last_login',
-                       'is_vouched', 'can_vouch']
+                       'is_vouched', 'can_vouch', 'referral_source']
     form = UserProfileAdminForm
     list_filter = ['is_vouched', 'can_vouch', DateJoinedFilter,
                    LastLoginFilter, LegacyVouchFilter, SuperUserFilter,
-                   CompleteProfileFilter, PublicProfileFilter, 'externalaccount__type']
+                   CompleteProfileFilter, PublicProfileFilter, AlternateEmailFilter,
+                   'externalaccount__type', 'referral_source']
     save_on_top = True
     list_display = ['full_name', 'email', 'username', 'geo_country', 'is_vouched', 'can_vouch',
                     'number_of_vouchees']
     list_display_links = ['full_name', 'email', 'username']
     actions = [subscribe_to_basket_action(), unsubscribe_from_basket_action(),
-               update_can_vouch_action()]
+               update_vouch_flags_action()]
 
     fieldsets = (
         ('Account', {
@@ -347,6 +398,9 @@ class UserProfileAdmin(AdminImageMixin, ExportMixin, admin.ModelAdmin):
         }),
         ('Skills', {
             'fields': ('skills',)
+        }),
+        ('Referral Source', {
+            'fields': ('referral_source',)
         }),
     )
 
@@ -399,6 +453,22 @@ class UserProfileAdmin(AdminImageMixin, ExportMixin, admin.ModelAdmin):
         messages.success(request, 'Profile indexing started.')
         return HttpResponseRedirect(reverse('admin:users_userprofile_changelist'))
 
+    def check_celery(self, request):
+        try:
+            investigator = mozillians.users.tasks.check_celery.delay()
+        except socket_error as e:
+            messages.error(request, 'Cannot connect to broker: %s' % e)
+            return HttpResponseRedirect(reverse('admin:users_userprofile_changelist'))
+
+        try:
+            investigator.get(timeout=5)
+        except investigator.TimeoutError as e:
+            messages.error(request, 'Worker timeout: %s' % e)
+        else:
+            messages.success(request, 'Celery is OK')
+        finally:
+            return HttpResponseRedirect(reverse('admin:users_userprofile_changelist'))
+
     def get_urls(self):
         """Return custom and UserProfileAdmin urls."""
 
@@ -409,8 +479,11 @@ class UserProfileAdmin(AdminImageMixin, ExportMixin, admin.ModelAdmin):
             return update_wrapper(wrapper, view)
 
         urls = super(UserProfileAdmin, self).get_urls()
-        my_urls = patterns('', url(r'index_profiles', wrap(self.index_profiles),
-                                   name='users_index_profiles'))
+        my_urls = patterns(
+            '',
+            url(r'index_profiles', wrap(self.index_profiles), name='users_index_profiles'),
+            url(r'check_celery', wrap(self.check_celery), name='users_check_celery')
+        )
         return my_urls + urls
 
 admin.site.register(UserProfile, UserProfileAdmin)
@@ -459,7 +532,6 @@ class VouchAdmin(admin.ModelAdmin):
     save_on_top = True
     search_fields = ['voucher__user__username', 'voucher__full_name',
                      'vouchee__user__username', 'vouchee__full_name']
-    readonly_fields = ['date']
     list_display = ['vouchee', 'voucher', 'date', 'autovouch']
     list_filter = ['autovouch']
     form = VouchAdminForm

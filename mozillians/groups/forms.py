@@ -1,11 +1,12 @@
 from django import forms
-from django.core.exceptions import ValidationError
+from django.forms.widgets import RadioSelect
 
 import happyforms
 from tower import ugettext as _
 from tower import ugettext_lazy as _lazy
 
-from mozillians.groups.models import Group, GroupAlias
+from mozillians.groups.models import Group
+from mozillians.users.models import UserProfile
 
 
 class SortForm(forms.Form):
@@ -22,43 +23,58 @@ class SortForm(forms.Form):
 
 
 class GroupForm(happyforms.ModelForm):
+    curators = forms.ModelMultipleChoiceField(
+        queryset=UserProfile.objects.filter(is_vouched=True).exclude(full_name=''),
+        required=False)
+    invalidation_days = forms.IntegerField(
+        widget=forms.NumberInput(attrs={'placeholder': 'days'}),
+        min_value=1,
+        label='Membership will expire after',
+        required=False
+    )
 
     def clean(self):
         cleaned_data = super(GroupForm, self).clean()
         accepting_new = cleaned_data.get('accepting_new_members')
         criteria = cleaned_data.get('new_member_criteria')
+        curators = cleaned_data.get('curators')
 
         if not accepting_new == 'by_request':
             cleaned_data['new_member_criteria'] = u''
         else:
             if not criteria:
-                msg = _(u'You must either specify the criteria or change the acceptance selection.')
+                msg = _(u'You must either specify the criteria or change the '
+                        'acceptance selection.')
                 self._errors['new_member_criteria'] = self.error_class([msg])
                 del cleaned_data['new_member_criteria']
+
+        if not curators:
+            msg = _(u'The group must have at least one curator.')
+            self._errors['curators'] = self.error_class([msg])
+
         return cleaned_data
 
-    def clean_name(self):
-        """Verify that name is unique in ALIAS_MODEL.
+    def save(self, *args, **kwargs):
+        """Custom save method to add multiple curators."""
+        obj = super(GroupForm, self).save()
 
-        We have to duplicate code here and in
-        models.GroupBase.clean due to bug
-        https://code.djangoproject.com/ticket/16986. To update when we
-        upgrade to Django 1.7.
-
-        """
-        name = self.cleaned_data['name']
-        query = GroupAlias.objects.filter(name=name)
-        if self.instance.pk:
-            query = query.exclude(alias=self.instance)
-        if query.exists():
-            raise ValidationError(_('Group with this Name already exists.'))
-        return name
+        # Add the curators in the m2m field
+        obj.curators.clear()
+        for curator in self.cleaned_data['curators']:
+            obj.curators.add(curator)
+            # Ensure that all curators are members of the group
+            if not obj.has_member(curator):
+                obj.add_member(curator)
+        return obj
 
     class Meta:
         model = Group
         fields = ['name', 'description', 'irc_channel',
                   'website', 'wiki', 'accepting_new_members',
-                  'new_member_criteria']
+                  'new_member_criteria', 'terms', 'curators', 'invalidation_days']
+        widgets = {
+            'curators': forms.SelectMultiple()
+        }
 
 
 class SuperuserGroupForm(GroupForm):
@@ -76,6 +92,8 @@ class SuperuserGroupForm(GroupForm):
                   'members_can_leave',
                   'accepting_new_members',
                   'new_member_criteria',
+                  'terms',
+                  'invalidation_days'
                   ]
 
 
@@ -90,3 +108,11 @@ class MembershipFilterForm(forms.Form):
         if self.cleaned_data['filtr'] == '':
             return 'all'
         return self.cleaned_data['filtr']
+
+
+class TermsReviewForm(forms.Form):
+    terms_accepted = forms.ChoiceField(required=True, initial=True, widget=RadioSelect,
+                                       choices=[
+                                           (True, _('I accept these terms.')),
+                                           (False, _("I don't accept these terms."))
+                                       ])

@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.urlresolvers import reverse
 from django.db.models.query import QuerySet
 from django.test.utils import override_settings
 from django.utils import unittest
@@ -20,6 +21,7 @@ from mozillians.groups.tests import (GroupAliasFactory, GroupFactory,
                                      SkillAliasFactory, SkillFactory)
 from mozillians.users.managers import (EMPLOYEES, MOZILLIANS, PUBLIC, PUBLIC_INDEXABLE_FIELDS)
 from mozillians.users.models import ExternalAccount, UserProfile, _calculate_photo_filename, Vouch
+from mozillians.users.es import PrivacyAwareS, UserProfileMappingType
 from mozillians.users.tests import LanguageFactory, UserFactory
 
 
@@ -39,9 +41,9 @@ class SignaledFunctionsTests(TestCase):
                                     index_objects_mock):
         user = UserFactory.create()
         index_objects_mock.assert_called_with(
-            UserProfile, [user.userprofile.id], public_index=False)
+            UserProfileMappingType, [user.userprofile.id], public_index=False)
         unindex_objects_mock.assert_called_with(
-            UserProfile, [user.userprofile.id], public_index=True)
+            UserProfileMappingType, [user.userprofile.id], public_index=True)
 
     @patch('mozillians.users.models.index_objects.delay')
     @patch('mozillians.users.models.unindex_objects.delay')
@@ -60,8 +62,8 @@ class SignaledFunctionsTests(TestCase):
             user.delete()
 
         unindex_objects_mock.assert_has_calls([
-            call(UserProfile, [user.userprofile.id], public_index=False),
-            call(UserProfile, [user.userprofile.id], public_index=True)])
+            call(UserProfileMappingType, [user.userprofile.id], public_index=False),
+            call(UserProfileMappingType, [user.userprofile.id], public_index=True)])
 
     def test_delete_user_obj_on_profile_delete(self):
         user = UserFactory.create()
@@ -79,8 +81,9 @@ class SignaledFunctionsTests(TestCase):
         vouch = Vouch.objects.get(vouchee=vouchee)
         eq_(vouch.voucher, None)
 
+    @patch('mozillians.users.models.update_basket_task.delay')
     @override_settings(CAN_VOUCH_THRESHOLD=1)
-    def test_vouch_is_vouch_gets_updated(self):
+    def test_vouch_is_vouched_gets_updated(self, update_basket_mock):
         voucher = UserFactory.create()
         unvouched = UserFactory.create(vouched=False)
 
@@ -90,8 +93,10 @@ class SignaledFunctionsTests(TestCase):
         # Reload from database
         unvouched = User.objects.get(pk=unvouched.id)
         eq_(unvouched.userprofile.is_vouched, True)
+        ok_(update_basket_mock.called_with(unvouched.userprofile.id))
 
-    def test_unvouch_is_vouch_gets_updated(self):
+    @patch('mozillians.users.models.unsubscribe_from_basket_task.delay')
+    def test_unvouch_is_vouched_gets_updated(self, unsubscribe_from_basket_mock):
         vouched = UserFactory.create()
 
         eq_(vouched.userprofile.is_vouched, True)
@@ -100,6 +105,8 @@ class SignaledFunctionsTests(TestCase):
         # Reload from database
         vouched = User.objects.get(pk=vouched.id)
         eq_(vouched.userprofile.is_vouched, False)
+        ok_(unsubscribe_from_basket_mock.called_with(vouched.userprofile.email,
+                                                     vouched.userprofile.basket_token))
 
     @override_settings(CAN_VOUCH_THRESHOLD=5)
     def test_vouch_can_vouch_gets_updated(self):
@@ -118,6 +125,56 @@ class SignaledFunctionsTests(TestCase):
         # Reload from database
         unvouched = User.objects.get(pk=unvouched.id)
         eq_(unvouched.userprofile.can_vouch, True)
+
+    def test_vouch_alternate_mozilla_address(self):
+        user = UserFactory.create(vouched=False)
+        user.userprofile.externalaccount_set.create(type=ExternalAccount.TYPE_EMAIL,
+                                                    identifier='test@mozilla.com')
+        vouch_query = Vouch.objects.filter(vouchee=user.userprofile, autovouch=True,
+                                           description=settings.AUTO_VOUCH_REASON)
+        eq_(vouch_query.count(), 1)
+        eq_(user.userprofile.is_vouched, True)
+
+    def test_vouch_multiple_mozilla_alternate_emails(self):
+        user = UserFactory.create(vouched=False)
+        user.userprofile.externalaccount_set.create(type=ExternalAccount.TYPE_EMAIL,
+                                                    identifier='test1@mozilla.com')
+        user.userprofile.externalaccount_set.create(type=ExternalAccount.TYPE_EMAIL,
+                                                    identifier='test2@mozilla.com')
+        vouch_query = Vouch.objects.filter(vouchee=user.userprofile, autovouch=True,
+                                           description=settings.AUTO_VOUCH_REASON)
+        eq_(vouch_query.count(), 1)
+        eq_(user.userprofile.is_vouched, True)
+
+    def test_vouch_non_mozilla_alternate_email(self):
+        user = UserFactory.create(vouched=False)
+        user.userprofile.externalaccount_set.create(type=ExternalAccount.TYPE_EMAIL,
+                                                    identifier='test@example.com')
+        eq_(Vouch.objects.filter(vouchee=user.userprofile).count(), 0)
+        eq_(user.userprofile.is_vouched, False)
+
+    def test_vouch_mozilla_email_as_primary(self):
+        user = UserFactory.create(vouched=False, email='test1@mozilla.com')
+        eq_(Vouch.objects.filter(vouchee=user.userprofile).count(), 1)
+        eq_(user.userprofile.is_vouched, True)
+        user.userprofile.externalaccount_set.create(type=ExternalAccount.TYPE_EMAIL,
+                                                    identifier='test2@example.com')
+        eq_(Vouch.objects.filter(vouchee=user.userprofile).count(), 1)
+
+    def change_alternate_mozilla_email_to_primary(self):
+        user = UserFactory.create(vouched=False, email='test@example.com')
+        alternate_email = user.userprofile.externalaccount_set.create(
+            type=ExternalAccount.TYPE_EMAIL, identifier='test@mozilla.com')
+
+        with self.login(user) as client:
+            url = reverse('phonebook:change_primary_email', args=[alternate_email.pk])
+            client.get(url, follow=True)
+        user = User.objects.get(pk=user.pk)
+        eq_(user.email, 'test@mozilla.com')
+        eq_(user.userprofile.is_vouched, True)
+        vouch_query = Vouch.objects.filter(vouchee=user.userprofile, autovouch=True,
+                                           description=settings.AUTO_VOUCH_REASON)
+        eq_(vouch_query.count(), 1)
 
 
 class UserProfileTests(TestCase):
@@ -160,15 +217,15 @@ class UserProfileTests(TestCase):
         profile.skills.add(skill_1)
         profile.skills.add(skill_2)
 
-        result = UserProfile.extract_document(profile.id)
+        result = UserProfileMappingType.extract_document(profile.id)
         ok_(isinstance(result, dict))
         eq_(result['id'], profile.id)
         eq_(result['is_vouched'], profile.is_vouched)
-        eq_(result['region'], 'Attika')
-        eq_(result['city'], 'Athens')
+        eq_(result['region'], 'attika')
+        eq_(result['city'], 'athens')
         eq_(result['allows_community_sites'], profile.allows_community_sites)
         eq_(result['allows_mozilla_sites'], profile.allows_mozilla_sites)
-        eq_(set(result['country']), set(['gr', 'Greece']))
+        eq_(set(result['country']), set(['gr', 'greece']))
         eq_(result['fullname'], profile.full_name.lower())
         eq_(result['name'], profile.full_name.lower())
         eq_(result['bio'], profile.bio)
@@ -179,25 +236,35 @@ class UserProfileTests(TestCase):
             set([u'en', u'fr', u'english', u'french', u'français']))
 
     def test_get_mapping(self):
-        ok_(UserProfile.get_mapping())
+        ok_(UserProfileMappingType.get_mapping())
+
+    def test_privacy_aware_iterator(self):
+        UserFactory.create(userprofile={'ircname': 'foo'})
+        s = PrivacyAwareS(UserProfileMappingType)
+
+        # Manually set privacy level in UserProfileMappingType instance
+        s.privacy_level(PUBLIC)
+        q = s.query(ircname='foo')
+        eq_(len(q), 1)
+        eq_(q[0]._privacy_level, PUBLIC)
 
     @override_settings(ES_INDEXES={'default': 'index'})
-    @patch('mozillians.users.models.PrivacyAwareS')
+    @patch('mozillians.users.es.PrivacyAwareS')
     def test_search_no_public_only_vouched(self, PrivacyAwareSMock):
-        result = UserProfile.search('foo')
+        result = UserProfileMappingType.search('foo')
         ok_(isinstance(result, Mock))
-        PrivacyAwareSMock.assert_any_call(UserProfile)
+        PrivacyAwareSMock.assert_any_call(UserProfileMappingType)
         PrivacyAwareSMock().indexes.assert_any_call('index')
         (PrivacyAwareSMock().indexes().boost()
          .query().order_by().filter.assert_any_call(is_vouched=True))
         ok_(call().privacy_level(PUBLIC) not in PrivacyAwareSMock.mock_calls)
 
     @override_settings(ES_INDEXES={'default': 'index'})
-    @patch('mozillians.users.models.PrivacyAwareS')
+    @patch('mozillians.users.es.PrivacyAwareS')
     def test_search_no_public_with_unvouched(self, PrivacyAwareSMock):
-        result = UserProfile.search('foo', include_non_vouched=True)
+        result = UserProfileMappingType.search('foo', include_non_vouched=True)
         ok_(isinstance(result, Mock))
-        PrivacyAwareSMock.assert_any_call(UserProfile)
+        PrivacyAwareSMock.assert_any_call(UserProfileMappingType)
         PrivacyAwareSMock().indexes.assert_any_call('index')
         ok_(call().indexes().boost()
             .query().order_by().filter(is_vouched=True)
@@ -205,11 +272,11 @@ class UserProfileTests(TestCase):
         ok_(call().privacy_level(PUBLIC) not in PrivacyAwareSMock.mock_calls)
 
     @override_settings(ES_INDEXES={'public': 'public_index'})
-    @patch('mozillians.users.models.PrivacyAwareS')
+    @patch('mozillians.users.es.PrivacyAwareS')
     def test_search_public_only_vouched(self, PrivacyAwareSMock):
-        result = UserProfile.search('foo', public=True)
+        result = UserProfileMappingType.search('foo', public=True)
         ok_(isinstance(result, Mock))
-        PrivacyAwareSMock.assert_any_call(UserProfile)
+        PrivacyAwareSMock.assert_any_call(UserProfileMappingType)
         PrivacyAwareSMock().privacy_level.assert_any_call(PUBLIC)
         (PrivacyAwareSMock().privacy_level()
          .indexes.assert_any_call('public_index'))
@@ -217,12 +284,12 @@ class UserProfileTests(TestCase):
          .query().order_by().filter.assert_any_call(is_vouched=True))
 
     @override_settings(ES_INDEXES={'public': 'public_index'})
-    @patch('mozillians.users.models.PrivacyAwareS')
+    @patch('mozillians.users.es.PrivacyAwareS')
     def test_search_public_with_unvouched(self, PrivacyAwareSMock):
-        result = UserProfile.search(
+        result = UserProfileMappingType.search(
             'foo', public=True, include_non_vouched=True)
         ok_(isinstance(result, Mock))
-        PrivacyAwareSMock.assert_any_call(UserProfile)
+        PrivacyAwareSMock.assert_any_call(UserProfileMappingType)
         PrivacyAwareSMock().privacy_level.assert_any_call(PUBLIC)
         (PrivacyAwareSMock().privacy_level()
          .indexes.assert_any_call('public_index'))
@@ -289,6 +356,19 @@ class UserProfileTests(TestCase):
         user_groups = user_1.userprofile.get_annotated_groups()
         eq_([group_1], user_groups)
 
+    def test_get_annotated_groups_only_visible(self):
+        """ Test that get_annotated_groups() only returns visible groups
+
+        """
+        group_1 = GroupFactory.create(visible=True)
+        group_2 = GroupFactory.create(visible=False)
+        profile = UserFactory.create().userprofile
+        group_1.add_member(profile)
+        group_2.add_member(profile)
+
+        user_groups = profile.get_annotated_groups()
+        eq_([group_1], user_groups)
+
     @patch('mozillians.users.models.UserProfile.auto_vouch')
     def test_auto_vouch_on_profile_save(self, auto_vouch_mock):
         UserFactory.create()
@@ -331,11 +411,11 @@ class UserProfileTests(TestCase):
 
     @override_settings(ES_INDEXES={'public': 'foo'})
     def test_get_index_public(self):
-        ok_(UserProfile.get_index(public_index=True), 'foo')
+        ok_(UserProfileMappingType.get_index(public_index=True), 'foo')
 
     @override_settings(ES_INDEXES={'default': 'bar'})
     def test_get_index(self):
-        ok_(UserProfile.get_index(public_index=False), 'bar')
+        ok_(UserProfileMappingType.get_index(public_index=False), 'bar')
 
     def test_set_privacy_level_with_save(self):
         user = UserFactory.create()
@@ -603,27 +683,6 @@ class VouchTests(TestCase):
         user = User.objects.get(id=user.id)
         ok_(user.userprofile.is_vouched)
         eq_(user.userprofile.vouches_received.all()[0].autovouch, True)
-
-    @override_settings(CAN_VOUCH_THRESHOLD=1)
-    @patch('mozillians.users.models.UserProfile._email_now_vouched')
-    @patch('mozillians.users.models.datetime')
-    def test_revouch_legacy_vouch(self, datetime_mock, email_vouched_mock):
-        dt = make_aware(datetime(2012, 01, 01, 00, 10), pytz.UTC)
-        datetime_mock.now.return_value = dt
-        user_1 = UserFactory.create()
-        user_2 = UserFactory.create(vouched=False)
-        ok_(not user_2.userprofile.is_vouched)
-        # Create a legacy vouch
-        Vouch.objects.create(voucher=user_1.userprofile, vouchee=user_2.userprofile)
-
-        user_2.userprofile.vouch(user_1.userprofile, 'Re-Vouching')
-        user_2 = User.objects.get(id=user_2.id)
-        ok_(user_2.userprofile.is_vouched)
-        eq_(user_2.userprofile.vouches_received.all()[0].voucher, user_1.userprofile)
-        eq_(user_2.userprofile.vouches_received.all()[0].date, dt)
-        eq_(user_2.userprofile.vouches_received.all().count(), 1)
-        eq_(user_2.userprofile.vouches_received.all()[0].description, 'Re-Vouching')
-        ok_(email_vouched_mock.called)
 
     @override_settings(CAN_VOUCH_THRESHOLD=1)
     def test_voucher_public(self):

@@ -13,6 +13,7 @@ import happyforms
 from PIL import Image
 from tower import ugettext as _, ugettext_lazy as _lazy
 
+from mozillians.api.models import APIv2App
 from mozillians.groups.models import Skill
 from mozillians.phonebook.models import Invite
 from mozillians.phonebook.validators import validate_username
@@ -58,6 +59,21 @@ AccountsFormset = inlineformset_factory(UserProfile, ExternalAccount,
                                         form=ExternalAccountForm, extra=1)
 
 
+class AlternateEmailForm(happyforms.ModelForm):
+    class Meta:
+        model = ExternalAccount
+        fields = ['privacy']
+
+AlternateEmailFormset = inlineformset_factory(UserProfile, ExternalAccount,
+                                              form=AlternateEmailForm, extra=0)
+
+
+class EmailPrivacyForm(happyforms.ModelForm):
+    class Meta:
+        model = UserProfile
+        fields = ['privacy_email']
+
+
 class SearchForm(happyforms.Form):
     q = forms.CharField(required=False)
     limit = forms.IntegerField(
@@ -91,7 +107,7 @@ class SearchFilter(django_filters.FilterSet):
     )
 
     vouched = django_filters.ChoiceFilter(
-        name='vouched', label=_lazy('Display only'), required=False,
+        name='vouched', label=_lazy(u'Display only'), required=False,
         choices=CHOICES, action=filter_vouched)
 
     class Meta:
@@ -125,7 +141,7 @@ class UserForm(happyforms.ModelForm):
         # This causes a potential race condition however the worst that can
         # happen is bad UI.
         if (User.objects.filter(username=username).
-            exclude(pk=self.instance.id).exists()):
+                exclude(pk=self.instance.id).exists()):
             raise forms.ValidationError(_(u'This username is in use. Please try'
                                           u' another.'))
 
@@ -140,42 +156,15 @@ class UserForm(happyforms.ModelForm):
         return username
 
 
-class ProfileForm(happyforms.ModelForm):
+class BasicInformationForm(happyforms.ModelForm):
     photo = forms.ImageField(label=_lazy(u'Profile Photo'), required=False)
     photo_delete = forms.BooleanField(label=_lazy(u'Remove Profile Photo'),
                                       required=False)
-    date_mozillian = forms.DateField(
-        required=False,
-        label=_lazy(u'When did you get involved with Mozilla?'),
-        widget=MonthYearWidget(years=range(1998, datetime.today().year + 1),
-                               required=False))
-    skills = forms.CharField(
-        label='',
-        help_text=_lazy(u'Start typing to add a skill (example: Python, '
-                        u'javascript, Graphic Design, User Research)'),
-        required=False)
-    lat = forms.FloatField(widget=forms.HiddenInput)
-    lng = forms.FloatField(widget=forms.HiddenInput)
-    savecountry = forms.BooleanField(
-        label=_lazy('Required'),
-        initial=True, required=False,
-        widget=forms.CheckboxInput(attrs={'disabled': 'disabled'})
-    )
-    saveregion = forms.BooleanField(label=_lazy('Save'), required=False, show_hidden_initial=True)
-    savecity = forms.BooleanField(label=_lazy('Save'), required=False, show_hidden_initial=True)
 
     class Meta:
         model = UserProfile
-        fields = ('full_name', 'ircname', 'bio', 'photo',
-                  'allows_community_sites', 'tshirt',
-                  'title', 'allows_mozilla_sites',
-                  'date_mozillian', 'story_link', 'timezone',
-                  'privacy_photo', 'privacy_full_name', 'privacy_ircname',
-                  'privacy_email', 'privacy_timezone', 'privacy_tshirt',
-                  'privacy_bio', 'privacy_geo_city', 'privacy_geo_region',
-                  'privacy_geo_country', 'privacy_groups',
-                  'privacy_skills', 'privacy_languages',
-                  'privacy_date_mozillian', 'privacy_story_link', 'privacy_title')
+        fields = ('photo', 'privacy_photo', 'full_name',
+                  'privacy_full_name', 'bio', 'privacy_bio',)
         widgets = {'bio': forms.Textarea()}
 
     def clean_photo(self):
@@ -199,24 +188,61 @@ class ProfileForm(happyforms.ModelForm):
                 photo.size = cleaned_photo.tell()
         return photo
 
+
+class SkillsForm(happyforms.ModelForm):
+    skills = forms.CharField(
+        label='',
+        help_text=_lazy(u'Start typing to add a skill (example: Python, '
+                        u'javascript, Graphic Design, User Research)'),
+        required=False)
+
+    class Meta:
+        model = UserProfile
+        fields = ('privacy_skills',)
+
     def clean_skills(self):
         if not re.match(r'^[a-zA-Z0-9 +.:,-]*$', self.cleaned_data['skills']):
             # Commas cannot be included in skill names because we use them to
             # separate names in a list
-            raise forms.ValidationError(_(u'Skills can only contain '
-                                          u'alphanumeric characters '
+            raise forms.ValidationError(_(u'Skills can only contain latin characters '
                                           u'and +.:-.'))
         skills = self.cleaned_data['skills']
         return filter(lambda x: x,
                       map(lambda x: x.strip() or False,
                           skills.lower().split(',')))
 
+    def save(self, *args, **kwargs):
+        """Save the data to profile."""
+        self.instance.set_membership(Skill, self.cleaned_data['skills'])
+        super(SkillsForm, self).save(*args, **kwargs)
+
+
+class LanguagesPrivacyForm(happyforms.ModelForm):
+    class Meta:
+        model = UserProfile
+        fields = ('privacy_languages',)
+
+
+class LocationForm(happyforms.ModelForm):
+    lat = forms.FloatField(widget=forms.HiddenInput)
+    lng = forms.FloatField(widget=forms.HiddenInput)
+    savecountry = forms.BooleanField(label=_lazy(u'Required'),
+                                     initial=True, required=False,
+                                     widget=forms.CheckboxInput(attrs={'disabled': 'disabled'}))
+    saveregion = forms.BooleanField(label=_lazy(u'Save'), required=False, show_hidden_initial=True)
+    savecity = forms.BooleanField(label=_lazy(u'Save'), required=False, show_hidden_initial=True)
+
+    class Meta:
+        model = UserProfile
+        fields = ('timezone', 'privacy_timezone', 'privacy_geo_city', 'privacy_geo_region',
+                  'privacy_geo_country',)
+
     def clean(self):
         # If lng/lat were provided, make sure they point at a country somewhere...
         if self.cleaned_data.get('lat') is not None and self.cleaned_data.get('lng') is not None:
             # We only want to call reverse_geocode if some location data changed.
             if ('lat' in self.changed_data or 'lng' in self.changed_data or
-                'saveregion' in self.changed_data or 'savecity' in self.changed_data):
+                    'saveregion' in self.changed_data or 'savecity' in self.changed_data):
                 self.instance.lat = self.cleaned_data['lat']
                 self.instance.lng = self.cleaned_data['lng']
                 self.instance.reverse_geocode()
@@ -241,10 +267,43 @@ class ProfileForm(happyforms.ModelForm):
 
         return self.cleaned_data
 
-    def save(self, *args, **kwargs):
-        """Save the data to profile."""
-        self.instance.set_membership(Skill, self.cleaned_data['skills'])
-        super(ProfileForm, self).save(*args, **kwargs)
+
+class ContributionForm(happyforms.ModelForm):
+    date_mozillian = forms.DateField(
+        required=False,
+        label=_lazy(u'When did you get involved with Mozilla?'),
+        widget=MonthYearWidget(years=range(1998, datetime.today().year + 1),
+                               required=False))
+
+    class Meta:
+        model = UserProfile
+        fields = ('title', 'privacy_title',
+                  'date_mozillian', 'privacy_date_mozillian',
+                  'story_link', 'privacy_story_link',)
+
+
+class TshirtForm(happyforms.ModelForm):
+    class Meta:
+        model = UserProfile
+        fields = ('tshirt', 'privacy_tshirt',)
+
+
+class GroupsPrivacyForm(happyforms.ModelForm):
+    class Meta:
+        model = UserProfile
+        fields = ('privacy_groups',)
+
+
+class IRCForm(happyforms.ModelForm):
+    class Meta:
+        model = UserProfile
+        fields = ('ircname', 'privacy_ircname',)
+
+
+class DeveloperForm(happyforms.ModelForm):
+    class Meta:
+        model = UserProfile
+        fields = ('allows_community_sites', 'allows_mozilla_sites',)
 
 
 class BaseLanguageFormSet(BaseInlineFormSet):
@@ -273,8 +332,7 @@ class EmailForm(happyforms.Form):
 
     def clean_email(self):
         email = self.cleaned_data['email']
-        if (User.objects
-            .exclude(pk=self.initial['user_id']).filter(email=email).exists()):
+        if (User.objects.exclude(pk=self.initial['user_id']).filter(email=email).exists()):
             raise forms.ValidationError(_(u'Email is currently associated with another user.'))
         return email
 
@@ -282,10 +340,16 @@ class EmailForm(happyforms.Form):
         return self.cleaned_data['email'] != self.initial['email']
 
 
-class RegisterForm(ProfileForm):
+class RegisterForm(BasicInformationForm, LocationForm):
     optin = forms.BooleanField(
         widget=forms.CheckboxInput(attrs={'class': 'checkbox'}),
         required=True)
+
+    class Meta:
+        model = UserProfile
+        fields = ('photo', 'full_name', 'timezone', 'privacy_photo', 'privacy_full_name', 'optin',
+                  'privacy_timezone', 'privacy_geo_city', 'privacy_geo_region',
+                  'privacy_geo_country',)
 
 
 class VouchForm(happyforms.Form):
@@ -303,7 +367,7 @@ class InviteForm(happyforms.ModelForm):
         label=_lazy(u'Personal message to be included in the invite email'),
         required=False, widget=forms.Textarea(),
     )
-    recipient = forms.EmailField(label=_lazy("Recipient's email"))
+    recipient = forms.EmailField(label=_lazy(u"Recipient's email"))
 
     def clean_recipient(self):
         recipient = self.cleaned_data['recipient']
@@ -316,3 +380,10 @@ class InviteForm(happyforms.ModelForm):
     class Meta:
         model = Invite
         fields = ['recipient']
+
+
+class APIKeyRequestForm(happyforms.ModelForm):
+
+    class Meta:
+        model = APIv2App
+        fields = ('name', 'description', 'url',)

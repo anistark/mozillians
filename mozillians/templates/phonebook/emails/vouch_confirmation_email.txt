@@ -29,6 +29,16 @@
 
 {% endif %}
 
+{% if vouch_description %}
+{% trans %}
+  Vouch description: {{ vouch_description }}
+{% endtrans %}
+{% endif %}
+
+{% trans %}
+  View your vouches on your profile {{ vouchee_profile_url }}
+{% endtrans %}
+
 {% if first_vouch %}
 {% trans %}
   Take a moment to join a functional area or group right now:

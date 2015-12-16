@@ -22,6 +22,8 @@
 // Invite/Invited
 // Special
 // Betasearch
+// Email settings
+// API keys
 
 /* Imports
 ==================== */
@@ -97,13 +99,14 @@
 }
 
 .well {
-  min-height: 20px;
-  padding: 19px;
-  margin-bottom: 20px;
-  background-color: @grayLight;
-  border: 1px solid darken(@grayLight, 7%);
-  .border-radius(4px);
-  .box-shadow(inset 0 1px 1px rgba(0,0,0,.05));
+    min-height: 20px;
+    padding: 19px;
+    margin-bottom: 20px;
+    word-wrap: break-word;
+    background-color: @grayLight;
+    border: 1px solid darken(@grayLight, 7%);
+    .border-radius(4px);
+    .box-shadow(inset 0 1px 1px rgba(0,0,0,.05));
 }
 
 .ellipsis{
@@ -125,6 +128,7 @@ body {
     #content-wrapper { background: @white; }
     &.loggedin {
         #masthead {
+            min-height: 55px;
             @media (max-width: @breakTablet) {
                 padding-bottom: 0;
             }
@@ -140,7 +144,7 @@ body {
             }
         }
         #nav-main {
-            @media (max-width: @breakTablet) {
+            @media (max-width: @breakDesktop) {
                 position: absolute;
                 i { font-size: 30px; }
                 span {
@@ -151,7 +155,7 @@ body {
 
         }
         .brand {
-            @media (max-width: @breakTablet) {
+            @media (max-width: @breakDesktop) {
                 margin-left: 40px;
             }
             @media (max-width: @breakMobileLandscape) {
@@ -166,7 +170,8 @@ body {
             #main {
                 min-height: 500px;
                 input[type=text], input[type=password],
-                input[type=email], input[type=search],
+                input[type=email], input[type=url],
+                input[type=search],
                 textarea {
                     border: 1px solid @grayLighter !important;
                     background: @white !important;
@@ -212,15 +217,45 @@ body {
                 color: #CD0000;
             }
         }
+
+        input[type="checkbox"] {
+            margin-right: 5px;
+            vertical-align: text-bottom;
+        }
+        .checkbox {
+            input[type="checkbox"] {
+                margin-left: 0px;
+                position: relative;
+            }
+        }
     }
 
     .error-message {
         color: #CD0000;
+        display: block;
     }
 
     .required:after {
         content: " *";
         color: @linkRed;
+    }
+
+    .info {
+        cursor: default;
+    }
+
+    .glyphicon {
+        vertical-align: middle;
+    }
+
+    .btn-group > .btn:not(:first-child):not(:last-child):not(.dropdown-toggle) {
+        border-top-right-radius: 3px;
+        border-bottom-right-radius: 3px;
+    }
+
+    .row {
+        margin-left: -15px;
+        margin-right: -15px;
     }
 }
 
@@ -231,11 +266,23 @@ body {
         input[type=email],
         input[type=password],
         input[type=search],
-        input[type=text] {
+        input[type=text],
+        input[type=url] {
             .open-sans-light;
             font-style: italic;
             font-size: 15px;
-            .border-radius(8px);
+            .border-radius(5px);
+        }
+        input[type=email],
+        input[type=password],
+        input[type=search],
+        input[type=text],
+        input[type=url] {
+            height: 30px;
+        }
+        input[type=text].search-query {
+            padding: 0 0 0 30px;
+            box-sizing: content-box;
         }
         select {
             display: inline-block;
@@ -249,10 +296,23 @@ body {
             background-color: @white;
             border: 1px solid #CCCCCC;
             margin-bottom: 0;
+            @media (max-width: @breakMobileLandscape){
+                width: 100%;
+            }
         }
+	span {
+	    padding-left: 6px;
+	}
     }
     input[disabled] {
         background: @grayLighter;
+    }
+    .pagination {
+        form {
+            select {
+                width: auto;
+            }
+        }
     }
 }
 
@@ -367,8 +427,24 @@ dl, dd {
   display: none;
 }
 
+li.list-group-item {
+    margin-left: 0px;
+}
+
+li.active {
+    background-color: @blueDark;
+
+    a {
+        color: @white;
+    }
+}
+
 /* Navigation
 ==================== */
+header {
+    box-sizing: content-box;
+}
+
 #nav-access {
     position: absolute;
     top: auto;
@@ -397,7 +473,7 @@ nav {
     .brand {
         float: left;
         img {
-            width: 130px;
+            width: 145px;
             padding-right: 15px;
         }
     }
@@ -464,6 +540,7 @@ nav {
                 left: 5px;
                 width: 14px;
                 height: 15px;
+                vertical-align: baseline;
             }
         }
         a {
@@ -492,7 +569,8 @@ nav {
             min-width: 170px;
             margin: 5px 0 0 0;
             top: 100%;
-            right: -15px;
+            right: -13px;
+            left: auto;
             z-index: 1000;
             display: none;
             li {
@@ -534,12 +612,12 @@ nav {
                 top: -8px;
                 right: 11px;
                 z-index: -100;
-                @media (max-width: @breakTablet) {
+                @media (max-width: @breakDesktop) {
                     right: 100%;
                     left: 4px;
                 }
             }
-            @media (max-width: @breakTablet) {
+            @media (max-width: @breakDesktop) {
                 left: 0;
                 right: auto;
                 i { font-size: 15px; }
@@ -591,7 +669,7 @@ nav {
             }
             img {
                 position: relative;
-                top: 2px;
+                bottom: 1px;
                 left: 5px;
                 width: 14px;
                 height: 15px;
@@ -704,6 +782,11 @@ footer#colophon {
             color: @linkSkyBlue;
         }
     }
+
+    a:hover,
+    a:active {
+        color: lighten(@linkBlue, 10%);
+    }
 }
 
 /* Homepage
@@ -806,6 +889,63 @@ body#home {
             }
         }
 
+        #start {
+            .open-sans-light;
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            font-size: 22px;
+            text-align: center;
+            margin: 30px auto;
+            padding: 20px 100px;
+            width: 360px;
+            .box-shadow(0 1px 1px rgba(0, 0, 0, .1));
+
+            .cta {
+                margin: 0;
+            }
+
+            .button {
+                background: #0096dd;
+                border-radius: 10px;
+                border: 0;
+                box-shadow: none;
+                color: #fff;
+                display: inline-block;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 20px 40px;
+                text-shadow: none;
+                text-transform: uppercase;
+                min-width: 220px;
+                .transition(all .15s ease-in-out);
+
+                &:hover,
+                &:focus,
+                &:active {
+                    color: #fff;
+                    background: lighten(#0096dd, 5%);
+                    text-decoration: none;
+                }
+
+                @media (max-width: @breakMobileLandscape) {
+                    min-width: 0;
+                    padding: 20px 30px;
+                    font-size: 16px;
+                }
+            }
+
+            @media (max-width: @breakTablet) {
+                padding: 20px 40px;
+            }
+
+            @media (max-width: @breakMobileLandscape) {
+                padding: 20px;
+                width: 245px;
+                font-size: 16px;
+            }
+        }
+
         #information {
             padding-bottom: 50px;
             .clearfix;
@@ -823,7 +963,6 @@ body#home {
                 }
             }
             #quote, #mozfacts {
-                .span(2);
                 margin: 0;
                 p {
                     font-size: 13px;
@@ -831,7 +970,6 @@ body#home {
                 }
             }
             #about {
-                width: 550px;
                 float: left;
                 margin: 0 50px;
                 p {
@@ -854,13 +992,15 @@ body#home {
                 position: relative;
                 span {
                     .rounded-image;
-                    width: 60px;
-                    height: 60px;
+                    width: 72px;
+                    height: 72px;
                     left: 18px;
                     border: 6px solid @white;
+                    margin-top: -75px;
                 }
                 blockquote {
                     margin-top: 75px;
+                    font-size: 1em;
                     p {
                         &:after, &:before {
                             content: '"';
@@ -873,11 +1013,16 @@ body#home {
                         }
                         &:before {
                             left: -20px;
-                            top: 67px;
+                            top: -8px;
                         }
                     }
                     small {
                         font-weight: bold;
+                        font-size: 12px;
+                        color: inherit;
+                        &:before {
+                            content: '';
+                        }
                     }
                 }
                 @media (max-width: @breakDesktop) {
@@ -932,8 +1077,65 @@ body#home {
     }
     &.loggedin {
         #main {
+            .search-info {
+                padding: 0 10px 0 25px;
+                border-left: 1px solid lighten(@black,90%);
+                margin-left: 0;
+                float: left;
+                width: 100%;
+                form {
+                    margin-bottom: 20px;
+                }
+                #homepage-search {
+                    input {
+                        width: 100%;
+                        height: 40px;
+                        border: 1px solid lighten(@black,90%);
+                        font-size: 20px;
+                        background: @white url("/static/mozillians/img/spyglass.png") no-repeat 5px 50% !important;
+                        padding: 0 0 0 30px !important;
+                        display: block;
+                        @media (max-width: @breakDesktop) {
+                            width: 95%;
+                        }
+                        @media (max-width: @breakMobileLandscape) {
+                            width: 91%;
+                            font-size: 16px;
+                        }
+                    }
+                    small {
+                        font-size: 12px;
+                        font-style: italic;
+                        color: lighten(@black,70%);
+                    }
+                    @media (max-width: @breakDesktop) {
+                        margin-top: 10px;
+                    }
+                }
+                @media (max-width: @breakDesktop) {
+                    padding: 0;
+                    margin: 0;
+                    text-align: center;
+                    border: none;
+                    float: none;
+                    h1 {
+                        .hidden;
+                    }
+                }
+            }
+            .search-top {
+                display: none;
+                @media (max-width: @breakDesktop) {
+                    display: block;
+                }
+            }
+            .search-right {
+                display: block;
+                @media (max-width: @breakDesktop) {
+                    display: none;
+                }
+            }
             #profile-info {
-                .span(3);
                 margin: 0;
                 position: relative;
                 a.profile-photo {
@@ -962,49 +1164,23 @@ body#home {
                     }
                 }
                 @media (max-width: @breakDesktop) {
+                    position: relative;
                     text-align: center;
                     width: 100%;
                 }
             }
             #content-info {
-                .span(8);
                 padding: 0 10px 0 25px;
-                margin: 0;
                 border-left: 1px solid lighten(@black,90%);
+                margin-left: 0;
                 h2 { margin: 30px 0 10px; }
                 h3 { font-size: 24px; }
-                section, form {
+                section {
                     margin-bottom: 20px;
                 }
                 @media (max-width: @breakMobileLandscape) {
                     padding: 0;
                     text-align: center;
-                }
-                #homepage-search {
-                    input {
-                        width: 100%;
-                        height: 40px;
-                        border: 1px solid lighten(@black,90%);
-                        font-size: 20px;
-                        background: @white url("/static/mozillians/img/spyglass.png") no-repeat 5px 50% !important;
-                        padding: 0 0 0 30px !important;
-                        display: block;
-                        @media (max-width: @breakDesktop) {
-                            width: 95%;
-                        }
-                        @media (max-width: @breakMobileLandscape) {
-                            width: 91%;
-                            font-size: 16px;
-                        }
-                    }
-                    small {
-                        font-size: 12px;
-                        font-style: italic;
-                        color: lighten(@black,70%);
-                    }
-                    @media (max-width: @breakDesktop) {
-                        display: none;
-                    }
                 }
                 .announcements-mozfacts {
                     .clearfix;
@@ -1021,9 +1197,9 @@ body#home {
 
                 }
                 .functional-areas, .groups {
-                    .span(4);
                     position: relative;
                     margin-bottom: 20px;
+                    max-width: 300px;
                     h2 {
                         margin: 0;
                         padding: 0 0 0 50px;
@@ -1037,7 +1213,7 @@ body#home {
                     }
                     span.icon {
                         .rounded-image;
-                        top: -20px;
+                        top: -10px;
                         width: 40px;
                         height: 40px;
                         border: 3px solid @white;
@@ -1046,6 +1222,7 @@ body#home {
                             .border-radius(100%);
                         }
                         @media (max-width: @breakMobileLandscape) {
+                            top: -70px;
                             left: 40%;
                             width: 60px;
                             height: 60px;
@@ -1055,19 +1232,18 @@ body#home {
                         width: 100%;
                         margin-bottom: 50px;
                     }
+                    @media (max-width: @breakMobileLandscape) {
+                        margin-bottom: 80px;
+                    }
                 }
                 .groups {
                     margin: 0;
                 }
                 .functional-areas {
                     margin-left: 0 !important;
-                    margin-right: 20px;
                 }
                 @media (max-width: @breakDesktop) {
                     border: none;
-                    h1 {
-                        .hidden;
-                    }
                     width: auto;
                 }
             }
@@ -1300,16 +1476,21 @@ form {
     fieldset {
         margin-bottom: 20px;
         padding-bottom: 20px;
-        border-bottom: 1px solid lighten(@black,90%);
         position: relative;
-        input, textarea {
-            border: 1px solid lighten(@black,90%);
+
+        &:last-child {
+            margin-bottom: 0px;
+            padding-bottom: 0px;
         }
 
         label {
             margin-right: 8px;
+            margin-top: 3px;
             float: left;
             font-weight: bold;
+            @media (max-width: @breakMobileLandscape) {
+                float: none;
+            }
         }
         > label {
             min-width: 120px;
@@ -1319,8 +1500,10 @@ form {
             }
         }
         textarea {
+            max-width: 390px;
             @media (max-width: @breakMobileLandscape) {
                 width: 200px;
+                max-width: 250px;
             }
         }
         legend {
@@ -1347,18 +1530,21 @@ form {
         }
         &> div#photo {
             position: relative;
-            height: 150px;
-            @media (max-width: @breakMobileLandscape) {
-                height: 200px;
-            }
+            height: 130px;
             .profile-photo {
                 .rounded-image;
-                width: 70px;
-                height: 70px;
-                margin-left: 120px;
+                width: 100px;
+                height: 100px;
+                clear: both;
+                position: relative;
                 @media (max-width: @breakMobileLandscape) {
                     margin-left: 0;
-                    top: 30px;
+                }
+            }
+            input.photo {
+                margin: 40px 0 0 0;
+                @media (max-width: @breakDesktop) {
+                    margin: 0;
                 }
             }
             label {
@@ -1367,19 +1553,14 @@ form {
                }
             }
             input {
-                margin-top: 90px;
                 @media (max-width: @breakMobileLandscape) {
                     margin-left: 0;
-                    margin-top: 100px;
                 }
             }
         }
         .privacy-controls {
-            position: absolute;
-            top: 0;
-            right: 0;
-            width: 190px;
-            text-align: right;
+            position: relative;
+            float: right;
             label { margin-top: 3px; }
             label.required:after {  // No need to mark the privacy controls required, they always have some value.
               content: '';
@@ -1388,8 +1569,9 @@ form {
                 position: relative;
                 top: auto;
                 right: auto;
-                padding-top: 25px;
+                padding-top: 5px;
                 label { margin: 0 8px 0 0; }
+                float: left;
             }
         }
         &.edit-controls {
@@ -1412,17 +1594,30 @@ form {
                     padding-bottom: 25px;
                 }
             }
+            .form-group {
+                .tagit {
+                    overflow: inherit;
+                    padding: 0px;
+                }
+                .help-block {
+                    clear: both;
+                }
+            }
         }
         &#delete {
-            margin-top: 50px;
             border: none;
+            margin-bottom: 0px;
+            padding-bottom: 0px;
         }
         div#id_photo_delete {
-            margin: 10px 0 0 100px;
+            margin: 10px 0 0 0;
             @media (max-width: @breakMobileLandscape) {
                 margin: 10px 0 0 0;
             }
-            input { margin: 0; }
+            input {
+                margin: 0;
+                vertical-align: middle;
+            }
             label {
                 float: none;
             }
@@ -1432,25 +1627,28 @@ form {
                 margin-top: 50px;
           }
         }
-        &#accounts {
-            .externalaccount-fieldrow {
-                margin: 0 0 25px 130px;
+        div#accounts {
+            div.externalaccount-fieldrow {
+                padding: 10px 0;
                 @media (max-width: @breakTablet) {
                     margin: 0;
                     padding: 25px 0;
                 }
-                input, select {
+                input[input=text], select {
                     float: left;
+                    @media (max-width: @breakMobileLandscape){
+                        width: 100%;
+                    }
                 }
-                input { margin-right: 8px; }
+                input {
+                    margin-right: 8px;
+                    vertical-align: top;
+                }
                 .error-message { margin: 0; }
-            }
-            .privacy-controls {
-                position: relative;
-                float: right;
-                .clearfix;
-                @media (max-width: @breakTablet) {
-                    float: none;
+                .privacy-controls {
+                    position: relative;
+                    float: right;
+                    .clearfix;
                 }
             }
         }
@@ -1470,6 +1668,19 @@ form {
                     color: #CD0000;
                     text-decoration: underline;
                 }
+            }
+            label {
+                display: inline;
+                margin: 0px;
+                min-width: auto;
+                input[type="checkbox"] {
+                    margin: 0px;
+                    position: relative;
+                    display: inline;
+                }
+            }
+            #id_optin {
+                margin-left: 5px;
             }
         }
         &#shirts {
@@ -1524,8 +1735,8 @@ form {
             }
         }
         .under-input-field {
-            padding-left: 130px;
-            @media (max-width: @breakMobileLandscape) {
+            padding-left: 35px;
+            @media (max-width: @breakDesktop) {
                 padding-left: 0px;
             }
         }
@@ -1581,8 +1792,8 @@ body#edit-profile {
     }
 
     .geocheckbox {
-      margin-left: 5%;
       display: inline;
+      text-align: right;
 
       label {
         float: none;
@@ -1590,7 +1801,13 @@ body#edit-profile {
     }
     span.geodisplay {
       display: inline-block;
-      min-width: 100px;
+      min-width: 160px;
+      float:right;
+      margin-top: 3px;
+      @media (max-width: @breakMobileLandscape) {
+          min-width: auto;
+          float: none;
+      }
     }
 
     // map things
@@ -1611,7 +1828,8 @@ body#edit-profile {
         bottom: 1.8em;
         width: 13em;
         @media (max-width: @breakMobileLandscape) {
-            width: 8em;
+            width: 6.4em;
+            right: 9.6em;
         }
         height: 2em;
       }
@@ -1686,8 +1904,72 @@ body#edit-profile {
       }
     }
 
+    .panel-heading {
+        .info {
+            float:right;
+        }
+    }
 
+    .settings-all {
+        cursor: pointer;
+    }
 
+    .field_description {
+        display: inline;
+        vertical-align: top;
+        float: left;
+        @media (max-width: @breakTablet) {
+            float: none;
+        }
+    }
+
+    input[type=text],
+    input[type=url] {
+        @media (max-width: @breakMobileLandscape){
+            width: 100%;
+        }
+    }
+}
+
+.registration-photo {
+    .privacy-controls {
+        float: left;
+    }
+}
+
+.registration {
+    fieldset {
+        @media (max-width: @breakDesktop) {
+            margin-top: 30px;
+            margin-bottom: 0px;
+            padding-bottom: 0px;
+        }
+    }
+
+    .geodisplay {
+        min-width: 250px;
+        margin-top: 3px;
+
+        @media (max-width: @breakDesktop) {
+            float: none;
+            min-width: 300px;
+        }
+        @media (max-width: @breakMobileLandscape){
+            min-width: 50%;
+        }
+    }
+}
+
+#photo {
+    .registration {
+        .privacy-controls {
+            margin-top: 10px;
+        }
+    }
+}
+
+.input-file {
+    margin-bottom: 15px;
 }
 
 /* Generic Groups, Functional Areas and Search Results
@@ -1760,14 +2042,20 @@ body.search-page {
             }
         }
     }
-    form.sort-form {
-        label { display: none; }
-        input[type=submit] {
-            .button;
-            margin-left: 10px;
+    #outer-wrapper {
+        form.sort-form {
+            label { display: none; }
+            input[type=submit] {
+                .button;
+                margin-left: 10px;
+            }
+            margin: 20px 0;
+            select {
+                @media (max-width: @breakMobileLandscape){
+                    width: auto;
+                }
+            }
         }
-        margin: 20px 0;
-
     }
     .groups-areas {
         .clearfix;
@@ -1775,7 +2063,7 @@ body.search-page {
             list-style: none;
             li {
                 float: left;
-                margin: 20px 20px 0 0;
+                margin: 20px 0 0 0;
                 padding: 0;
                 width: 290px;
                 height: 75px;
@@ -1808,7 +2096,8 @@ body.search-page {
 body#search {
     #search-form {
         margin-bottom: 20px;
-        input[type=text] {
+        input[type=text],
+        input[type=url] {
             border: 1px solid lighten(@black,90%);
             margin-right: 8px;
             @media (max-width: @breakMobileLandscape) {
@@ -1940,6 +2229,12 @@ body#group-show {
     }
 }
 
+form.group-add {
+    select[multiple] {
+        height: 100px !important;
+        width: 450px;
+    }
+}
 
 /* Invite/Invited
 ================== */
@@ -2021,4 +2316,60 @@ body#betasearch {
 
 #betasearch #id_groups, #id_skills {
     min-height: 90px;
+}
+
+/* Email settings
+================== */
+#add-email {
+    display: block;
+    margin-top: 10px;
+}
+
+.alternate-email-fieldrow {
+    .delete{
+        opacity: 1.0;
+    }
+}
+
+fieldset {
+    .email-label {
+        float: none;
+    }
+    .email-controls {
+        display: inline-block;
+    }
+    &#alternate-email {
+        .alternate-email-fieldrow {
+            margin-bottom: 20px;
+            .email {
+                min-width: 300px;
+                display: inline-block;
+            }
+        }
+        .privacy-controls {
+            position: relative;
+            @media (max-width: 700px) {
+                float: none;
+            }
+        }
+    }
+}
+
+/* API keys
+============ */
+
+#apikeys{
+    .delete {
+        .button-negative;
+        @media (max-width: 700px) {
+            margin-bottom: 10px;
+        }
+    }
+    div.api-key {
+        margin-bottom: 20px;
+    }
+
+    ul {
+        margin-bottom: 5px;
+    }
 }

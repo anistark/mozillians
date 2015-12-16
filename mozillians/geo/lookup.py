@@ -3,6 +3,7 @@ import requests
 from requests import ConnectionError, HTTPError
 
 from django.conf import settings
+from django.db.models import Q
 
 from product_details import product_details
 
@@ -108,6 +109,27 @@ def result_to_country_region_city(result):
     return country, region, city
 
 
+def deduplicate_countries(country, dup_country):
+    """
+    Given 2 Country instances, deduplicate dup_country and it's references.
+    """
+    # Deduplicate geo data
+    regions = dup_country.region_set.all()
+    if regions.exists():
+        regions.update(country=country)
+
+    cities = dup_country.city_set.all()
+    if cities.exists():
+        cities.update(country=country)
+
+    # Deduplicate user data
+    users = dup_country.userprofile_set.all()
+    if users.exists():
+        users.update(geo_country=country)
+
+    dup_country.delete()
+
+
 def result_to_country(result):
     """
     Given one result from mapbox, converted to a dictionary keyed on 'type',
@@ -118,19 +140,47 @@ def result_to_country(result):
         mapbox_country = result['country']
         codes = dict((v, k) for k, v in product_details.get_regions('en-US').iteritems())
         code = codes.get(mapbox_country['name'], '')
-        country, created = Country.objects.get_or_create(
-            mapbox_id=mapbox_country['id'],
-            defaults=dict(
-                name=mapbox_country['name'],
-                code=code,
-            )
-        )
-        if not created:
-            # Update name if it's changed in mapbox
-            if country.name != mapbox_country['name']:
-                country.name = mapbox_country['name']
-                country.save()
+        lookup_args = {
+            'name': mapbox_country['name']
+        }
+        args = {
+            'mapbox_id': mapbox_country['id'],
+            'code': code
+        }
+
+        args.update(lookup_args)
+
+        query = Q(**lookup_args) | Q(mapbox_id=mapbox_country['id'])
+        country_qs = Country.objects.filter(query).distinct()
+
+        if country_qs.exists():
+            # Check if deduplication is required
+            if country_qs.count() == 2:
+                deduplicate_countries(country_qs[0], country_qs[1])
+
+            country_qs.update(**args)
+            country = country_qs[0]
+        else:
+            country = Country.objects.create(**args)
+
         return country
+
+
+def deduplicate_regions(region, dup_region):
+    """
+    Given 2 Country instances, deduplicate dup_country and it's references.
+    """
+    # Deduplicate geo data
+    cities = dup_region.city_set.all()
+    if cities.exists():
+        cities.update(region=region)
+
+    # Deduplicate user data
+    users = dup_region.userprofile_set.all()
+    if users.exists():
+        users.update(geo_region=region)
+
+    dup_region.delete()
 
 
 def result_to_region(result, country):
@@ -140,19 +190,39 @@ def result_to_region(result, country):
     """
     if 'province' in result:
         mapbox_region = result['province']
-        region, created = Region.objects.get_or_create(
-            mapbox_id=mapbox_region['id'],
-            defaults=dict(
-                name=mapbox_region['name'],
-                country=country,
-            )
-        )
-        if not created:
-            # Update name if it's changed in mapbox
-            if region.name != mapbox_region['name']:
-                region.name = mapbox_region['name']
-                region.save()
+        lookup_args = {
+            'name': mapbox_region['name'],
+            'country': country
+        }
+
+        args = {
+            'mapbox_id': mapbox_region['id']
+        }
+
+        args.update(lookup_args)
+
+        query = Q(**lookup_args) | Q(mapbox_id=mapbox_region['id'])
+        region_qs = Region.objects.filter(query).distinct()
+
+        if region_qs.exists():
+            if region_qs.count() == 2:
+                deduplicate_regions(region_qs[0], region_qs[1])
+            region_qs.update(**args)
+            region = region_qs[0]
+        else:
+            region = Region.objects.create(**args)
+
         return region
+
+
+def deduplicate_cities(city, dup_city):
+    """
+    Given 2 City instances, deduplicate dup_city and it's references to city.
+    """
+    users = dup_city.userprofile_set.all()
+    if users.exists():
+        users.update(geo_city=city, geo_region=city.region, geo_country=city.country)
+    dup_city.delete()
 
 
 def result_to_city(result, country, region):
@@ -163,36 +233,39 @@ def result_to_city(result, country, region):
     # City has more data, but is similar to region and country
     if 'city' in result:
         mapbox_city = result['city']
-        created = False
-        lookup_args = dict(
-            name=mapbox_city['name'],
-            country=country,
-            region=region,
-        )
-        defaults = dict(
-            mapbox_id=mapbox_city['id'],
-            lat=mapbox_city['lat'],
-            lng=mapbox_city['lon'],
-        )
+        lookup_args = {
+            'name': mapbox_city['name'],
+            'country': country,
+            'region': region,
+        }
+        args = {
+            'mapbox_id': mapbox_city['id'],
+            'lat': mapbox_city['lat'],
+            'lng': mapbox_city['lon'],
+        }
 
-        try:
-            city = City.objects.get(mapbox_id=mapbox_city['id'])
-        except City.DoesNotExist:
-            # Mapbox sometimes returns multiple cities with the same
-            # name but different ids. So we need to check for existing
-            # (name, region, country) groups to avoid filling the
-            # database with multiple rows for a particular city.
+        args.update(lookup_args)
 
-            city, created = City.objects.get_or_create(defaults=defaults, **lookup_args)
+        # Mapbox sometimes returns multiple cities with the same
+        # name but different ids. On top of that there is a possibility
+        # to return updated data for a specific mapbox_id that might collide
+        # with an existing DB entry, thus raising an IntegrityError for key
+        # (name, region, country). In that case we need to deduplicate City
+        # instances and its references.
 
-        if not created:
-            # Update if anything has changed
-            do_save = False
-            defaults.update(lookup_args)
-            for key, val in defaults.iteritems():
-                if getattr(city, key) != val:
-                    setattr(city, key, val)
-                    do_save = True
-            if do_save:
-                city.save()
+        query = Q(**lookup_args) | Q(mapbox_id=mapbox_city['id'])
+        city_qs = City.objects.filter(query).distinct()
+
+        if city_qs.exists():
+            # Check if deduplication is required
+            if city_qs.count() == 2:
+                deduplicate_cities(city_qs[0], city_qs[1])
+
+            # Update DB with new geocoding data for city instance
+            city_qs.update(**args)
+            city = city_qs[0]
+
+        else:
+            city = City.objects.create(**args)
+
         return city

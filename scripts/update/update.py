@@ -15,9 +15,12 @@ import urllib2
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from commander.deploy import task, hostgroups
-
 import commander_settings as settings
 
+
+# Setup virtualenv path.
+venv_bin_path = os.path.join(settings.SRC_DIR, '..', 'venv', 'bin')
+os.environ['PATH'] = venv_bin_path + os.pathsep + os.environ['PATH']
 
 NEW_RELIC_URL = 'https://rpm.newrelic.com/deployments.xml'
 GITHUB_URL = 'https://github.com/mozilla/mozillians/compare/{oldrev}...{newrev}'
@@ -45,16 +48,15 @@ def update_locales(ctx):
 @task
 def update_assets(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("LANG=en_US.UTF-8 python2.6 manage.py collectstatic --noinput --no-default-ignore -i .git")
-        ctx.local("LANG=en_US.UTF-8 python2.6 manage.py compress_jingo")
-        ctx.local("LANG=en_US.UTF-8 python2.6 manage.py update_product_details")
+        ctx.local("LANG=en_US.UTF-8 python manage.py collectstatic --noinput --no-default-ignore -i .git")
+        ctx.local("LANG=en_US.UTF-8 python manage.py compress --engine jinja2")
+        ctx.local("LANG=en_US.UTF-8 python manage.py update_product_details")
 
 
 @task
 def database(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py syncdb")                             # South (new)
-        ctx.local("python2.6 manage.py migrate")                            # South (new)
+        ctx.local("python manage.py migrate --noinput")
 
 
 @task
@@ -96,24 +98,25 @@ def ping_newrelic(ctx):
 @task
 def update_es_indexes(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py cron index_all_profiles &")
+        ctx.local("python manage.py cron index_all_profiles &")
+
 
 @task
 def validate_fun_facts(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py cron validate_fun_facts")
+        ctx.local("python manage.py cron validate_fun_facts")
 
 
 @task
 def generate_humanstxt(ctx):
     with ctx.lcd(settings.SRC_DIR):
-        ctx.local("python2.6 manage.py cron generate_humanstxt &")
+        ctx.local("python manage.py cron generate_humanstxt &")
 
 
-#@task
-#def install_cron(ctx):
+# @task
+# def install_cron(ctx):
 #    with ctx.lcd(settings.SRC_DIR):
-#        ctx.local("python2.6 ./scripts/crontab/gen-crons.py -k %s -u apache > /etc/cron.d/.%s" %
+#        ctx.local("python ./scripts/crontab/gen-crons.py -k %s -u apache > /etc/cron.d/.%s" %
 #                  (settings.WWW_DIR, settings.CRON_NAME))
 #        ctx.local("mv /etc/cron.d/.%s /etc/cron.d/%s" % (settings.CRON_NAME, settings.CRON_NAME))
 
@@ -128,15 +131,18 @@ def deploy_app(ctx):
     ctx.remote(settings.REMOTE_UPDATE_SCRIPT)
     ctx.remote("/bin/touch %s" % settings.REMOTE_WSGI)
 
+
 @hostgroups(settings.WEB_HOSTGROUP, remote_kwargs={'ssh_key': settings.SSH_KEY})
 def prime_app(ctx):
     for http_port in range(80, 82):
         ctx.remote("for i in {1..10}; do curl -so /dev/null -H 'Host: %s' -I http://localhost:%s/ & sleep 1; done" % (settings.REMOTE_HOSTNAME, http_port))
 
+
 @hostgroups(settings.CELERY_HOSTGROUP, remote_kwargs={'ssh_key': settings.SSH_KEY})
 def update_celery(ctx):
     ctx.remote(settings.REMOTE_UPDATE_SCRIPT)
     ctx.remote('/sbin/service %s restart' % settings.CELERY_SERVICE)
+    ctx.remote('/sbin/service %s restart' % settings.CELERYBEAT_SERVICE)
 
 
 @task
@@ -173,12 +179,12 @@ def deploy(ctx):
     checkin_changes()
     deploy_app()
     prime_app()
+    update_celery()
     # Things run below here should not break the deployment if they fail.
-    if 'mozillians-dev' not in settings.REMOTE_HOSTNAME or not OLDREV.startswith(NEWREV):
+    if OLDREV != NEWREV:
         # On dev, this script runs every 15 minutes. If we're pushing the same
         # revision we don't need to churn the index, ping new relic, or any of this.
         ping_newrelic()
-        update_celery()
         update_es_indexes()
         validate_fun_facts()
         generate_humanstxt()

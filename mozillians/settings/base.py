@@ -54,9 +54,9 @@ DOMAIN_METHODS = {
 
 # Accepted locales
 LANGUAGE_CODE = 'en-US'
-PROD_LANGUAGES = ('ca', 'cs', 'de', 'en-US', 'es', 'hu', 'fr', 'it', 'ko',
-                  'nl', 'pl', 'pt-BR', 'ru', 'sk', 'sl', 'sq', 'sv', 'zh-TW',
-                  'zh-CN', 'lt', 'ja')
+PROD_LANGUAGES = ('ca', 'cs', 'de', 'en-US', 'en-GB', 'es', 'hu', 'fr', 'it', 'ko',
+                  'nl', 'pl', 'pt-BR', 'pt-PT', 'ro', 'ru', 'sk', 'sl', 'sq', 'sr',
+                  'sv-SE', 'zh-TW', 'zh-CN', 'lt', 'ja', 'hsb', 'dsb', 'uk',)
 
 # List of RTL locales known to this project. Subset of LANGUAGES.
 RTL_LANGUAGES = ()  # ('ar', 'fa', 'fa-IR', 'he')
@@ -82,14 +82,20 @@ TEMPLATE_CONTEXT_PROCESSORS = get_template_context_processors(
 JINGO_EXCLUDE_APPS = [
     'admin',
     'autocomplete_light',
-    'browserid'
+    'browserid',
+    'rest_framework',
 ]
 
 
 def JINJA_CONFIG():
     config = funfactory_JINJA_CONFIG()
-    config['extensions'].append('jingo_offline_compressor.jinja2ext.CompressorExtension')
+    config['extensions'].append('compressor.contrib.jinja2ext.CompressorExtension')
     return config
+
+
+def COMPRESS_JINJA2_GET_ENVIRONMENT():
+    from jingo import env
+    return env
 
 
 MIDDLEWARE_CLASSES = get_middleware(append=[
@@ -116,6 +122,7 @@ SUPPORTED_NONLOCALES = list(SUPPORTED_NONLOCALES) + [
     'csp',
     'api',
     'browserid',
+    'contribute.json',
     'admin',
     'autocomplete',
     'humans.txt'
@@ -150,13 +157,10 @@ INSTALLED_APPS = get_apps(append=[
     'autocomplete_light',
 
     'django.contrib.admin',
-    'django_browserid',
-    'jingo_offline_compressor',
     'import_export',
     'waffle',
+    'rest_framework',
 
-    # DB migrations
-    'south',
 ])
 
 # Auth
@@ -188,21 +192,23 @@ MAX_PHOTO_UPLOAD_SIZE = 8 * (1024 ** 2)
 AUTO_VOUCH_DOMAINS = ('mozilla.com', 'mozilla.org', 'mozillafoundation.org')
 AUTO_VOUCH_REASON = 'An automatic vouch for being a Mozilla employee.'
 
-SOUTH_TESTS_MIGRATE = False
-
 # Django-CSP
 CSP_DEFAULT_SRC = ("'self'",
                    'http://*.mapbox.com',
                    'https://*.mapbox.com')
 CSP_FONT_SRC = ("'self'",
                 'http://*.mozilla.net',
-                'https://*.mozilla.net')
+                'https://*.mozilla.net',
+                'http://*.mozilla.org',
+                'https://*.mozilla.org')
 CSP_FRAME_SRC = ("'self'",
                  'https://login.persona.org',)
 CSP_IMG_SRC = ("'self'",
                'data:',
                'http://*.mozilla.net',
                'https://*.mozilla.net',
+               'http://*.mozilla.org',
+               'https://*.mozilla.org',
                '*.google-analytics.com',
                '*.gravatar.com',
                '*.wp.com',
@@ -228,7 +234,7 @@ CSP_STYLE_SRC = ("'self'",
 
 # Elasticutils settings
 ES_DISABLED = True
-ES_HOSTS = ['127.0.0.1:9200']
+ES_URLS = ['http://127.0.0.1:9200']
 ES_INDEXES = {'default': 'mozillians',
               'public': 'mozillians-public'}
 ES_INDEXING_TIMEOUT = 10
@@ -298,7 +304,7 @@ HUMANSTXT_FILE = os.path.join(STATIC_ROOT, 'humans.txt')
 HUMANSTXT_URL = urljoin(STATIC_URL, 'humans.txt')
 
 # These must both be set to a working mapbox token for the maps to work.
-MAPBOX_MAP_ID = 'examples.map-i86nkdio'
+MAPBOX_MAP_ID = 'examples.map-zr0njcqy'
 # This is the token for the edit profile page alone.
 MAPBOX_PROFILE_ID = MAPBOX_MAP_ID
 
@@ -332,3 +338,20 @@ VOUCH_COUNT_LIMIT = 6
 
 # All accounts need 1 vouches to be able to vouch.
 CAN_VOUCH_THRESHOLD = 3
+
+REST_FRAMEWORK = {
+    'URL_FIELD_NAME': '_url',
+    'PAGINATE_BY': 30,
+    'MAX_PAGINATE_BY': 200,
+    'DEFAULT_PERMISSION_CLASSES': (
+        'mozillians.api.v2.permissions.MozilliansPermission',
+    ),
+    'DEFAULT_MODEL_SERIALIZER_CLASS':
+        'rest_framework.serializers.HyperlinkedModelSerializer',
+    'DEFAULT_FILTER_BACKENDS': (
+        'rest_framework.filters.DjangoFilterBackend',
+        'rest_framework.filters.OrderingFilter',
+    ),
+}
+
+TEST_RUNNER = 'django.test.runner.DiscoverRunner'

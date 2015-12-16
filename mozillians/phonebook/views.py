@@ -4,17 +4,21 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
-from django.http import Http404
+from django.db import transaction
+from django.http import HttpResponseRedirect, Http404
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
+from django.utils.safestring import mark_safe
 from django.views.decorators.cache import cache_page, never_cache
 from django.views.decorators.http import require_POST
 
+from funfactory.helpers import urlparams
 from funfactory.urlresolvers import reverse
 from tower import ugettext as _
 from waffle.decorators import waffle_flag
 
 import mozillians.phonebook.forms as forms
+from mozillians.api.models import APIv2App
 from mozillians.common.decorators import allow_public, allow_unvouched
 from mozillians.common.helpers import redirect
 from mozillians.common.middleware import LOGIN_MESSAGE, GET_VOUCHED_MESSAGE
@@ -23,7 +27,7 @@ from mozillians.groups.models import Group
 from mozillians.phonebook.models import Invite
 from mozillians.phonebook.utils import redeem_invite
 from mozillians.users.managers import EMPLOYEES, MOZILLIANS, PUBLIC, PRIVILEGED
-from mozillians.users.models import UserProfile
+from mozillians.users.models import ExternalAccount, UserProfile, UserProfileMappingType
 
 
 @allow_unvouched
@@ -36,7 +40,11 @@ def login(request):
 @never_cache
 @allow_public
 def home(request):
-    return render(request, 'phonebook/home.html')
+    show_start = False
+    if request.GET.get('source', ''):
+        show_start = True
+    return render(request, 'phonebook/home.html',
+                  {'show_start': show_start})
 
 
 @waffle_flag('testing-autovouch-views')
@@ -87,7 +95,6 @@ def view_profile(request, username):
     privacy_mappings = {'anonymous': PUBLIC, 'mozillian': MOZILLIANS, 'employee': EMPLOYEES,
                         'privileged': PRIVILEGED, 'myself': None}
     privacy_level = None
-    profile_is_vouchable = False
 
     if (request.user.is_authenticated() and request.user.username == username):
         # own profile
@@ -123,7 +130,6 @@ def view_profile(request, username):
                 request.user.userprofile.privacy_level)
 
         if (request.user.is_authenticated() and profile.is_vouchable(request.user.userprofile)):
-            profile_is_vouchable = True
 
             vouch_form = forms.VouchForm(request.POST or None)
             data['vouch_form'] = vouch_form
@@ -136,15 +142,14 @@ def view_profile(request, username):
                 messages.info(request, msg)
                 return redirect('phonebook:profile_view', profile.user.username)
 
-    data['profile_is_vouchable'] = profile_is_vouchable
     data['shown_user'] = profile.user
     data['profile'] = profile
     data['groups'] = profile.get_annotated_groups()
 
     # Only show pending groups if user is looking at their own profile,
     # or current user is a superuser
-    if not (request.user.is_authenticated()
-            and (request.user.username == username or request.user.is_superuser)):
+    if not (request.user.is_authenticated() and
+            (request.user.username == username or request.user.is_superuser)):
         data['groups'] = [grp for grp in data['groups'] if not grp.pending]
 
     return render(request, 'phonebook/profile.html', data)
@@ -154,76 +159,161 @@ def view_profile(request, username):
 @never_cache
 def edit_profile(request):
     """Edit user profile view."""
-    # Don't user request.user
+    # Don't use request.user
     user = User.objects.get(pk=request.user.id)
     profile = user.userprofile
     user_groups = profile.groups.all().order_by('name')
     user_skills = stringify_groups(profile.skills.all().order_by('name'))
+    emails = ExternalAccount.objects.filter(type=ExternalAccount.TYPE_EMAIL)
+    accounts_qs = ExternalAccount.objects.exclude(type=ExternalAccount.TYPE_EMAIL)
 
-    user_form = forms.UserForm(request.POST or None, instance=user)
-    accounts_formset = forms.AccountsFormset(request.POST or None, instance=profile)
-    new_profile = False
-    form = forms.ProfileForm
-    language_formset = forms.LanguagesFormset(request.POST or None,
-                                              instance=profile,
-                                              locale=request.locale)
+    sections = {
+        'registration_section': ['user_form', 'registration_form'],
+        'basic_section': ['user_form', 'basic_information_form'],
+        'groups_section': ['groups_privacy_form'],
+        'skills_section': ['skills_form'],
+        'email_section': ['email_privacy_form', 'alternate_email_formset'],
+        'languages_section': ['language_privacy_form', 'language_formset'],
+        'accounts_section': ['accounts_formset'],
+        'irc_section': ['irc_form'],
+        'location_section': ['location_form'],
+        'contribution_section': ['contribution_form'],
+        'tshirt_section': ['tshirt_form'],
+        'developer_section': ['developer_form']
+    }
 
-    if not profile.is_complete:
-        new_profile = True
-        form = forms.RegisterForm
+    curr_sect = next((s for s in sections.keys() if s in request.POST), None)
 
-    profile_form = form(request.POST or None, request.FILES or None,
-                        instance=profile,
-                        initial={'skills': user_skills,
-                                 'saveregion': True if profile.geo_region else False,
-                                 'savecity': True if profile.geo_city else False,
-                                 'lat': profile.lat,
-                                 'lng': profile.lng})
+    def get_request_data(form):
+        if curr_sect and form in sections[curr_sect]:
+            return request.POST
+        return None
 
-    email_form = forms.EmailForm(request.POST or None,
-                                 initial={'email': request.user.email,
-                                          'user_id': request.user.id})
+    ctx = {}
+    ctx['user_form'] = forms.UserForm(get_request_data('user_form'), instance=user)
+    ctx['registration_form'] = forms.RegisterForm(get_request_data('registration_form'),
+                                                  request.FILES or None,
+                                                  instance=profile)
+    basic_information_data = get_request_data('basic_information_form')
+    ctx['basic_information_form'] = forms.BasicInformationForm(basic_information_data,
+                                                               request.FILES or None,
+                                                               instance=profile)
+    ctx['accounts_formset'] = forms.AccountsFormset(get_request_data('accounts_formset'),
+                                                    instance=profile,
+                                                    queryset=accounts_qs)
+    ctx['language_formset'] = forms.LanguagesFormset(get_request_data('language_formset'),
+                                                     instance=profile,
+                                                     locale=request.locale)
+    language_privacy_data = get_request_data('language_privacy_form')
+    ctx['language_privacy_form'] = forms.LanguagesPrivacyForm(language_privacy_data,
+                                                              instance=profile)
+    ctx['skills_form'] = forms.SkillsForm(get_request_data('skills_form'), instance=profile,
+                                          initial={'skills': user_skills})
+    location_initial = {
+        'saveregion': True if profile.geo_region else False,
+        'savecity': True if profile.geo_city else False,
+        'lat': profile.lat,
+        'lng': profile.lng
+    }
+    ctx['location_form'] = forms.LocationForm(get_request_data('location_form'), instance=profile,
+                                              initial=location_initial)
+    ctx['contribution_form'] = forms.ContributionForm(get_request_data('contribution_form'),
+                                                      instance=profile)
+    ctx['tshirt_form'] = forms.TshirtForm(get_request_data('tshirt_form'), instance=profile)
+    ctx['groups_privacy_form'] = forms.GroupsPrivacyForm(get_request_data('groups_privacy_form'),
+                                                         instance=profile)
+    ctx['irc_form'] = forms.IRCForm(get_request_data('irc_form'), instance=profile)
+    ctx['developer_form'] = forms.DeveloperForm(get_request_data('developer_form'),
+                                                instance=profile)
+    ctx['email_privacy_form'] = forms.EmailPrivacyForm(get_request_data('email_privacy_form'),
+                                                       instance=profile)
+    alternate_email_formset_data = get_request_data('alternate_email_formset')
+    ctx['alternate_email_formset'] = forms.AlternateEmailFormset(alternate_email_formset_data,
+                                                                 instance=profile,
+                                                                 queryset=emails)
+    forms_valid = True
+    if request.POST:
+        if not curr_sect:
+            raise Http404
+        curr_forms = map(lambda x: ctx[x], sections[curr_sect])
+        forms_valid = all(map(lambda x: x.is_valid(), curr_forms))
+        if forms_valid:
+            old_username = request.user.username
+            for f in curr_forms:
+                f.save()
 
-    all_forms = [user_form, profile_form, accounts_formset, email_form,
-                 language_formset]
+            next_section = request.GET.get('next')
+            next_url = urlparams(reverse('phonebook:profile_edit'), next_section)
+            if curr_sect == 'registration_section':
+                settings_url = reverse('phonebook:profile_edit')
+                settings_link = '<a href="{0}">settings</a>'.format(settings_url)
+                msg = _(u'Your registration is complete. '
+                        u'Feel free to visit the {0} page to add '
+                        u'additional information to your profile.'.format(settings_link))
+                messages.info(request, mark_safe(msg))
+                redeem_invite(profile, request.session.get('invite-code'))
+                next_url = reverse('phonebook:profile_view', args=[user.username])
+            elif user.username != old_username:
+                msg = _(u'You changed your username; '
+                        u'please note your profile URL has also changed.')
+                messages.info(request, _(msg))
+            return HttpResponseRedirect(next_url)
 
-    # Using ``list`` to force calling is_valid on all the forms, even if earlier
-    # ones are not valid, so we detect and display all the errors.
-    if all(list(f.is_valid() for f in all_forms)):
-        old_username = request.user.username
-        user_form.save()
-        profile_form.save()
-        accounts_formset.save()
-        language_formset.save()
+    ctx.update({
+        'user_groups': user_groups,
+        'profile': request.user.userprofile,
+        'vouch_threshold': settings.CAN_VOUCH_THRESHOLD,
+        'mapbox_id': settings.MAPBOX_PROFILE_ID,
+        'apps': user.apiapp_set.filter(is_active=True),
+        'appsv2': profile.apps.filter(enabled=True),
+        'forms_valid': forms_valid
+    })
 
-        if new_profile:
-            redeem_invite(profile, request.session.get('invite-code'))
-            messages.info(request, _(u'Your account has been created.'))
-        elif user.username != old_username:
-            # Notify the user that their old profile URL won't work.
-            messages.info(request,
-                          _(u'You changed your username; please note your '
-                            u'profile URL has also changed.'))
+    return render(request, 'phonebook/edit_profile.html', ctx)
 
-        if email_form.email_changed():
-            return render(request, 'phonebook/verify_email.html',
-                          {'email': email_form.cleaned_data['email']})
-        return redirect('phonebook:profile_view', user.username)
 
-    data = dict(profile_form=profile_form,
-                user_form=user_form,
-                accounts_formset=accounts_formset,
-                email_form=email_form,
-                user_groups=user_groups,
-                profile=request.user.userprofile,
-                apps=user.apiapp_set.filter(is_active=True),
-                language_formset=language_formset,
-                vouch_threshold=settings.CAN_VOUCH_THRESHOLD,
-                mapbox_id=settings.MAPBOX_PROFILE_ID)
+@allow_unvouched
+@never_cache
+def delete_email(request, email_pk):
+    """Delete alternate email address."""
+    user = User.objects.get(pk=request.user.id)
+    profile = user.userprofile
 
-    # If there are form errors, don't send a 200 OK.
-    status = 400 if any(f.errors for f in all_forms) else 200
-    return render(request, 'phonebook/edit_profile.html', data, status=status)
+    # Only email owner can delete emails
+    if not ExternalAccount.objects.filter(user=profile, pk=email_pk).exists():
+        raise Http404()
+
+    ExternalAccount.objects.get(pk=email_pk).delete()
+    return redirect('phonebook:profile_edit')
+
+
+@allow_unvouched
+@never_cache
+def change_primary_email(request, email_pk):
+    """Change primary email address."""
+    user = User.objects.get(pk=request.user.id)
+    profile = user.userprofile
+    alternate_emails = ExternalAccount.objects.filter(user=profile,
+                                                      type=ExternalAccount.TYPE_EMAIL)
+
+    # Only email owner can change primary email
+    if not alternate_emails.filter(pk=email_pk).exists():
+        raise Http404()
+
+    alternate_email = alternate_emails.get(pk=email_pk)
+    primary_email = user.email
+
+    # Change primary email
+    user.email = alternate_email.identifier
+
+    # Turn primary email to alternate
+    alternate_email.identifier = primary_email
+
+    with transaction.atomic():
+        user.save()
+        alternate_email.save()
+
+    return redirect('phonebook:profile_edit')
 
 
 @allow_unvouched
@@ -260,11 +350,11 @@ def search(request):
         include_non_vouched = form.cleaned_data['include_non_vouched']
         page = request.GET.get('page', 1)
         functional_areas = Group.get_functional_areas()
-        public = not (request.user.is_authenticated()
-                      and request.user.userprofile.is_vouched)
+        public = not (request.user.is_authenticated() and
+                      request.user.userprofile.is_vouched)
 
-        profiles = UserProfile.search(query, public=public,
-                                      include_non_vouched=include_non_vouched)
+        profiles = UserProfileMappingType.search(
+            query, public=public, include_non_vouched=include_non_vouched)
         if not public:
             groups = Group.search(query)
 
@@ -315,11 +405,13 @@ def betasearch(request):
         query = form.cleaned_data.get('q', u'')
         limit = form.cleaned_data['limit']
         page = request.GET.get('page', 1)
-        public = not (request.user.is_authenticated()
-                      and request.user.userprofile.is_vouched)
+        public = not (request.user.is_authenticated() and
+                      request.user.userprofile.is_vouched)
 
         profiles_matching_filter = list(filtr.qs.values_list('id', flat=True))
-        profiles = UserProfile.search(query, include_non_vouched=True, public=public)
+        profiles = UserProfileMappingType.search(query,
+                                                 include_non_vouched=True,
+                                                 public=public)
         profiles = profiles.filter(id__in=profiles_matching_filter)
 
         paginator = Paginator(profiles, limit)
@@ -389,6 +481,36 @@ def delete_invite(request, invite_pk):
             (deleted_invite.recipient, deleted_invite.recipient))
     messages.success(request, msg)
     return redirect('phonebook:invite')
+
+
+@waffle_flag('apiv2')
+def apikeys(request):
+    profile = request.user.userprofile
+    apikey_request_form = forms.APIKeyRequestForm(
+        request.POST or None,
+        instance=APIv2App(enabled=True, owner=profile)
+    )
+
+    if apikey_request_form.is_valid():
+        apikey_request_form.save()
+        msg = _(u'API Key generated successfully.')
+        messages.success(request, msg)
+        return redirect('phonebook:apikeys')
+
+    data = {
+        'apps': request.user.apiapp_set.filter(is_active=True),
+        'appsv2': profile.apps.filter(enabled=True),
+        'apikey_request_form': apikey_request_form,
+    }
+    return render(request, 'phonebook/apikeys.html', data)
+
+
+@waffle_flag('apiv2')
+def delete_apikey(request, api_pk):
+    api_key = get_object_or_404(APIv2App, pk=api_pk, owner=request.user.userprofile)
+    api_key.delete()
+    messages.success(request, _('API key successfully deleted.'))
+    return redirect('phonebook:apikeys')
 
 
 def list_mozillians_in_location(request, country, region=None, city=None):

@@ -1,7 +1,7 @@
 <div class="result">
   {% if group %}
     {% if is_curator %}
-      {% if user != profile.user %}
+      {% if user != profile.user and not user_is_curator(group, profile) %}
         <form action="{{ url('groups:remove_member', url=group.url, user_pk=profile.pk) }}"
               method="GET">
           {{ csrf() }}
@@ -24,9 +24,12 @@
   <div class="card">
     <div class="avatar">
       <span>
-        <img class="profile-photo"
-           src="{{ profile.get_photo_url('70x70') }}"
-           alt="{{ _('Profile Photo') }}">
+        <a title="{{ profile.display_name }}"
+           href="{{ url('phonebook:profile_view', profile.user.username) }}">
+          <img class="profile-photo"
+               src="{{ profile.get_photo_url('70x70') }}"
+               alt="{{ _('Profile Photo') }}">
+        </a>
       </span>
     </div>
     <div class="details">

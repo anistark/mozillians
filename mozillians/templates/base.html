@@ -22,10 +22,11 @@
 
   {% block site_css %}
     {% compress css %}
-      <link href="{{ static('mozillians/icons/style.css') }}" type="text/css" rel="stylesheet" media="screen" />
+      <link href="{{ static('mozillians/css/bootstrap.min.css') }}" rel="stylesheet" media="screen" />
+      <link href="{{ static('mozillians/icons/style.css') }}" type="text/css" rel="stylesheet" media="screen" /> 
       <link href="{{ static('mozillians/css/main.less') }}" type="text/less" rel="stylesheet" media="screen" />
-      <link href="{{ static('mozillians/css/jquery-ui-1.8.16.custom.css') }}" rel="stylesheet" media="screen" />
       <link href="{{ static('mozillians/js/libs/tag-it/css/jquery.tagit.css') }}" rel="stylesheet" media="screen" />
+      <link href="{{ static('mozillians/css/jquery-ui-1.11-custom.css') }}" rel="stylesheet" media="screen" />
     {% endcompress %}
   {% endblock %}
   <link href="//mozorg.cdn.mozilla.net/media/css/tabzilla-min.css" rel="stylesheet" />
@@ -105,7 +106,7 @@
                         <li>
                           <a id="nav-edit-profile" href="{{ url('phonebook:profile_edit') }}">
                             <i class="icon-pencil"></i>
-                            {{ _('Edit Your Profile') }}
+                            {{ _('Settings') }}
                           </a>
                         </li>
                         {% if user.userprofile.is_vouched %}
@@ -136,7 +137,7 @@
                       {{ _('Log Out') }}
                     </a>
                   {% endif %}
-                {% else %}
+                {% elif not show_start %}
                   <a href="#" id="nav-login" class="persona-button browserid-login"
                      title="{{_('Sign in')}}"
                      data-next="{{ request.REQUEST.next|default(url('phonebook:login')) }}">
@@ -159,10 +160,10 @@
       <div id="content-wrapper">
         <div id="main" class="container">
           {% block messages %}
-            {% for message in messages %}
-              {% with label = message.tags in ['error', 'success', 'info', 'warning'] %}
-                <div class="alert {% if label %}alert-{{ message.tags }}{% endif %}">
-                  {{ message }}
+            {% for m in messages %}
+              {% with label = m.tags in ['error', 'success', 'info', 'warning'] %}
+                <div class="alert {% if label %}alert-{{ m.tags }}{% endif %}">
+                  {{ m.message }}
                 </div>
               {% endwith %}
             {% endfor %}
@@ -181,7 +182,7 @@
           <div class="row">
 
             <h5>
-              {% trans bug_url='https://bugzilla.mozilla.org/enter_bug.cgi?product=Community%20Tools&component=Phonebook',
+              {% trans bug_url='https://bugzilla.mozilla.org/enter_bug.cgi?product=Participation%20Infrastructure&component=Phonebook',
                    git_url='https://github.com/mozilla/mozillians' %}
                 Help make Mozillians better.
                 <a href="{{ bug_url }}">File a bug</a> or
@@ -224,8 +225,9 @@
 
   {% block site_js %}
     {% compress js %}
-      <script src="{{ static('mozillians/js/libs/jquery-1.8.3.min.js') }}"></script>
-      <script src="{{ static('mozillians/js/libs/jquery-ui-1.8.7.custom.min.js') }}"></script>
+      <script src="{{ static('mozillians/js/libs/jquery-1.11.3.min.js') }}"></script>
+      <script src="{{ static('mozillians/js/libs/bootstrap.min.js') }}"></script>
+      <script src="{{ static('mozillians/js/libs/jquery-ui.min.js') }}"></script>
       <script src="{{ static('mozillians/js/libs/jquery.placeholder.min.js') }}"></script>
       <script src="{{ static('mozillians/js/main.js') }}" rel="stylesheet"></script>
     {% endcompress %}

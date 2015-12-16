@@ -17,6 +17,7 @@
     var results_el = $('#location_search_results');
     var search_loading_el = $('#location_search_loading');
     var gps_loading_el = $('#location_gps_loading');
+    var improve_map_el = $('#improve_this_map');
 
 
     // MAPBOX
@@ -103,6 +104,7 @@
                 if(modifyForm){
                     set_latitude.val(youLatLng.lat);
                     set_longitude.val(youLatLng.lng);
+                    $(improve_map_el).attr('href','http://www.openstreetmap.org/note/new#map=13/'+youLatLng.lat+'/'+youLatLng.lng+'&layers=N');
                 }
             }
         });
@@ -205,6 +207,7 @@
 
         set_latitude.val(searchResult[0].lat);
         set_longitude.val(searchResult[0].lon);
+        $(improve_map_el).attr('href','http://www.openstreetmap.org/note/new#map=13/'+searchResult[0].lat+'/'+searchResult[0].lon+'&layers=N');
     }
 
 
@@ -223,10 +226,12 @@
             lng: geoposition.coords.longitude
         },true);
         gps_loading_el.hide();
+        $('#gps_error').hide();
     }
 
     function handleError(error){
         gps_loading_el.hide();
+        $('#gps_error').show();
     }
 
 
